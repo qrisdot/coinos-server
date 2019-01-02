@@ -218,8 +218,17 @@ const l = console.log
 
         await db.User.findAll({
           attributes: ['id', 'pending'],
-          where: { pending: { [Sequelize.Op.ne]: null } },
-        }).map(async u => { u.balance = u.pending; u.pending = 0; await u.save() })
+          where: { 
+            pending: { 
+              [Sequelize.Op.ne]: null,
+              [Sequelize.Op.ne]: 0,
+            } 
+          },
+        }).map(async u => { 
+          u.balance = u.pending
+          u.pending = 0
+          await u.save() 
+        })
         
         await db.Payment.update({
           confirmed: true,
