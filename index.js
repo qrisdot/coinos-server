@@ -226,7 +226,7 @@ const l = console.log
             } 
           },
         }).map(async user => { 
-          user.balance = u.pending
+          user.balance = user.pending
           user.pending = 0
           await user.save() 
           socket.to(sids[user.username]).emit('user', user)
