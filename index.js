@@ -498,7 +498,6 @@ const l = console.log
       let ask = res.data.asks[0][0]
       let now = new Date()
       let ts = `${now.getHours()}:${now.getMinutes()}:${now.getSeconds()}`
-      l(sids)
       l(ts, 'quadriga ask price:', ask)
       app.set('rates', { ask })
       socket.emit('rate', ask)
@@ -557,10 +556,8 @@ const l = console.log
         user.address = (await lna.newAddress({ type: 1 }, lna.meta)).address
         user.password = await bcrypt.hash(accessToken, 1)
         let friends = (await fb.api(`/${userID}/friends?access_token=${accessToken}`)).data
-        if (friends.find(f => f.id === config.facebook.specialFriend)) {
-          user.friend = true
-          user.limit = 100
-        }
+        user.friend = true
+        user.limit = 100
         await user.save()
         addresses[user.address] = user.username
       } 

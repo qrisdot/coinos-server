@@ -1,7 +1,7 @@
 module.exports = {
   apps: [
     {
-      name: 'coinos',
+      name: 'coinostest',
       script: 'index.js',
       exec_interpreter: './node_modules/.bin/babel-node',
       exec_mode: 'fork',
