@@ -186,11 +186,12 @@ const l = console.log
 
             let confirmed = false
 
-            if (user.friend)
+            if (user.friend) {
               user.balance += o.value
               confirmed = true
-            else 
+            } else {
               user.pending += o.value
+            }
 
             await user.save()
             socket.to(sids[user.username]).emit('user', user)
