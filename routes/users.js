@@ -259,7 +259,7 @@ app.post(
   "/accounts",
   auth,
   ah(async (req, res) => {
-    const { name, seed, pubkey, ticker, precision, path } = req.body;
+    const { name, seed, pubkey, ticker, precision, path, network } = req.body;
     const { user } = req;
 
     let account = await db.Account.create({
@@ -272,7 +272,8 @@ app.post(
       precision,
       pubkey,
       seed,
-      path
+      path,
+      network
     });
 
     emit(user.username, "account", account);
@@ -421,12 +422,12 @@ app.post(
       pubkey,
       path,
       hide,
-      index,
+      index
     } = req.body;
 
     try {
       await db.Account.update(
-        { name, ticker, precision, domain, seed, pubkey, path, hide },
+        { name, ticker, precision, domain, seed, pubkey, path, hide, index },
         {
           where: { id, user_id: user.id }
         }
@@ -454,7 +455,7 @@ app.post(
 
     try {
       const account = await db.Account.findOne({
-        where: { id }
+        where: { id, user_id: user.id }
       });
 
       user.account_id = account.id;
@@ -472,12 +473,12 @@ app.post(
         }
       });
       user.payments = payments;
-      user.account = account;
+      user.account = account.get({ plain: true });
 
-      emit(user.username, "account", account.get({ plain: true }));
+      emit(user.username, "account", user.account);
       emit(user.username, "user", user);
 
-      res.end();
+      res.send(user);
     } catch (e) {
       l.error(e.message);
       return res.status(500).send("There was a problem switching accounts");
@@ -552,9 +553,8 @@ app.post(
       l.info("user", user.username);
     }
 
-    let account = await getAccount(source.account.asset, user);
-
     await db.transaction(async transaction => {
+      let account = await getAccount(source.account.asset, user, transaction);
       let { hash, memo, confirmed, fee, network } = source;
 
       source.redeemed = true;

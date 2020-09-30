@@ -100,7 +100,7 @@ app.post(
       currency: user.currency,
       amount: value,
       tip: 0,
-      network: "BTC",
+      network: "bitcoin",
     });
 
     try {
@@ -273,7 +273,7 @@ lnurlServer.bindToHook(
               currency: recipient.currency,
               amount,
               tip: 0,
-              network: "BTC",
+              network: "bitcoin",
             });
             l.info("invoice created", invoice.text, invoice.amount);
           }
@@ -431,7 +431,7 @@ lnurlServer.bindToHook("login", async (key) => {
       } else {
         l.info("user not found");
         user = await register({
-          username: key,
+          username: key.substr(0, 8),
           password: key,
         });
       }
@@ -442,7 +442,7 @@ lnurlServer.bindToHook("login", async (key) => {
       const token = jwt.sign(payload, config.jwt);
       const ws = sessions[logins[key].k1];
       if (ws && ws.send)
-        ws.send(JSON.stringify({ type: "token", data: token }));
+        ws.send(JSON.stringify({ type: "token", data: { token, key } }));
     }
   } catch (e) {
     l.error("problem with login hook", e.message);

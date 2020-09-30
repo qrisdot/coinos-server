@@ -1,4 +1,4 @@
-const { DataTypes } = require('sequelize');
+const { DataTypes } = require("sequelize");
 
 const attributes = {
   id: {
@@ -10,6 +10,24 @@ const attributes = {
     comment: null,
     field: "id"
   },
+  a1_id: {
+    type: DataTypes.INTEGER(11),
+    allowNull: true,
+    defaultValue: null,
+    primaryKey: false,
+    autoIncrement: false,
+    comment: null,
+    field: "a1_id"
+  },
+  a2_id: {
+    type: DataTypes.INTEGER(11),
+    allowNull: true,
+    defaultValue: null,
+    primaryKey: false,
+    autoIncrement: false,
+    comment: null,
+    field: "a2_id"
+  },
   user_id: {
     type: DataTypes.INTEGER(11),
     allowNull: true,
@@ -18,6 +36,15 @@ const attributes = {
     autoIncrement: false,
     comment: null,
     field: "user_id"
+  },
+  completedAt: {
+    type: DataTypes.DATE,
+    allowNull: true,
+    defaultValue: null,
+    primaryKey: false,
+    autoIncrement: false,
+    comment: null,
+    field: "completedAt"
   },
   createdAt: {
     type: DataTypes.DATE,
@@ -37,26 +64,17 @@ const attributes = {
     comment: null,
     field: "updatedAt"
   },
-  a1: {
-    type: DataTypes.STRING(255),
+  fee: {
+    type: DataTypes.DOUBLE,
     allowNull: true,
     defaultValue: null,
     primaryKey: false,
     autoIncrement: false,
     comment: null,
-    field: "a1"
-  },
-  a2: {
-    type: DataTypes.STRING(255),
-    allowNull: true,
-    defaultValue: null,
-    primaryKey: false,
-    autoIncrement: false,
-    comment: null,
-    field: "a2"
+    field: "fee"
   },
   v1: {
-    type: DataTypes.INTEGER,
+    type: DataTypes.DOUBLE,
     allowNull: true,
     defaultValue: null,
     primaryKey: false,
@@ -65,13 +83,22 @@ const attributes = {
     field: "v1"
   },
   v2: {
-    type: DataTypes.INTEGER,
+    type: DataTypes.DOUBLE,
     allowNull: true,
     defaultValue: null,
     primaryKey: false,
     autoIncrement: false,
     comment: null,
     field: "v2"
+  },
+  rate: {
+    type: DataTypes.DOUBLE,
+    allowNull: true,
+    defaultValue: null,
+    primaryKey: false,
+    autoIncrement: false,
+    comment: null,
+    field: "rate"
   },
   text: {
     type: DataTypes.TEXT,
@@ -108,4 +135,4 @@ const options = {
   indexes: []
 };
 
-db["Proposal"] = db.define("proposals_model", attributes, options);
+db.Proposal = db.define("proposals_model", attributes, options);

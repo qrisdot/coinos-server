@@ -9,15 +9,8 @@ module.exports = ah(async (req, res, next) => {
     return res.status(500).send("Amount must be greater than zero");
 
   try {
-    await db.transaction(async (transaction) => {
-      let account = await db.Account.findOne({
-        where: {
-          user_id: user.id,
-          asset,
-        },
-        lock: transaction.LOCK.UPDATE,
-        transaction,
-      });
+    await db.transaction(async transaction => {
+      let { account } = user;
 
       if (account.balance < amount) {
         throw new Error("Insufficient funds");
@@ -28,7 +21,7 @@ module.exports = ah(async (req, res, next) => {
       account.balance -= amount;
       await account.save({ transaction });
 
-      const params = {
+      let params = {
         amount: -amount,
         account_id: account.id,
         memo,
@@ -37,13 +30,13 @@ module.exports = ah(async (req, res, next) => {
         currency: user.currency,
         confirmed: true,
         hash: "Internal Transfer",
-        network: "COINOS",
+        network: "COINOS"
       };
 
       if (!username) {
         l.info("creating redeemable payment");
         params.redeemcode = uuidv4();
-        params.hash = `${req.get('origin')}/redeem/${params.redeemcode}`;
+        params.hash = `${req.get("origin")}/redeem/${params.redeemcode}`;
       }
 
       let payment = await db.Payment.create(params, { transaction });
@@ -56,109 +49,98 @@ module.exports = ah(async (req, res, next) => {
       emit(user.username, "payment", payment);
       emit(user.username, "account", account);
       emit(user.username, "user", user);
-      res.send(payment);
 
       if (username) {
-        user = await db.User.findOne({
+        let recipient = await db.User.findOne({
           where: { username },
-        });
-
-
-        const invoice = await db.Invoice.findOne({
-          where: {
-            user_id: user.id,
-            network: "BTC"
-          },
-          order: [["id", "DESC"]],
           include: {
             model: db.Account,
-            as: "account",
-          },
-        });
+            as: "account"
+          }
+        },
+          { transaction });
 
-        if (invoice) ({ account } = invoice);
-        else if (user.account.asset === asset) ({ account } = user);
-        else {
-
-        let params = {
-          user_id: user.id,
+        let a2;
+        let acc = {
+          user_id: recipient.id,
           asset,
+          pubkey: null
         };
 
-        account = await db.Account.findOne({
-          where: params,
-          lock: transaction.LOCK.UPDATE,
-          transaction,
-        });
+        if (recipient.account.asset === asset && !recipient.account.pubkey)
+          ({ account: a2 } = recipient);
+        else {
+          a2 = await db.Account.findOne({
+            where: acc,
+          }, { transaction });
         }
 
-        if (account) {
-          account.balance += amount;
-          await account.save({ transaction });
+        if (a2) {
+          a2.balance += amount;
+          await a2.save({ transaction });
         } else {
           let name = asset.substr(0, 6);
           let domain;
           let ticker = asset.substr(0, 3).toUpperCase();
           let precision = 8;
 
-          const assets = (await axios.get("https://assets.blockstream.info/"))
-            .data;
+          const assets = app.get('assets');
 
           if (assets[asset]) {
             ({ domain, ticker, precision, name } = assets[asset]);
           } else {
             const existing = await db.Account.findOne({
               where: {
-                asset,
+                asset
               },
               order: [["id", "ASC"]],
-              limit: 1,
-            });
-
-            l.info("existing", existing);
+              limit: 1
+            }, { transaction });
 
             if (existing) {
               ({ domain, ticker, precision, name } = existing);
             }
           }
 
-          params = { ...params, ...{ domain, ticker, precision, name } };
-          params.balance = amount;
-          params.pending = 0;
-          account = await db.Account.create(params, { transaction });
+          acc = { ...acc, ...{ domain, ticker, precision, name } };
+          acc.balance = amount;
+          acc.pending = 0;
+          acc.network = 'liquid';
+          a2 = await db.Account.create(acc, { transaction });
         }
 
-        payment = await db.Payment.create(
+        let p2 = await db.Payment.create(
           {
             amount,
-            account_id: account.id,
-            user_id: user.id,
-            rate: app.get("rates")[user.currency],
-            currency: user.currency,
+            account_id: a2.id,
+            user_id: recipient.id,
+            rate: app.get("rates")[recipient.currency],
+            currency: recipient.currency,
             confirmed: true,
             hash: "Internal Transfer",
             memo,
             network: "COINOS",
-            received: true,
+            received: true
           },
           { transaction }
         );
 
-        payment = payment.get({ plain: true });
-        payment.account = account.get({ plain: true });
-        emit(user.username, "account", account);
-        emit(user.username, "payment", payment);
+        p2 = p2.get({ plain: true });
+        p2.account = a2.get({ plain: true });
+        emit(recipient.username, "account", p2.account);
+        emit(recipient.username, "payment", p2);
 
-        l.info("received internal", user.username, amount);
-        notify(user, `Received ${amount} ${account.ticker} sats`);
+        l.info("received internal", recipient.username, amount);
+        notify(recipient, `Received ${amount} ${a2.ticker} sats`);
       }
+      res.send(payment);
     });
   } catch (e) {
     l.error(
       "problem sending internal payment",
       user.username,
       user.balance,
-      e.message
+      e.message,
     );
     return res.status(500).send(e.message);
   }
