@@ -23,6 +23,27 @@ export const shortError = (msg: any, max = 400): string => {
   return s.length > max ? `${s.slice(0, max)}…` : s;
 };
 
+// Per-key log throttle for lines an attacker can emit at will (evicted-JWT
+// replays from a proxy pool, frozen-account send attempts, lnurl scans of
+// missing usernames). Returns null while the key is inside its quiet window,
+// otherwise the number of calls suppressed since the last emitted line — so
+// the first occurrence always logs, and the next one after the window carries
+// the suppressed count. In-memory: a restart simply logs again.
+const quietUntil = new Map<string, { until: number; dropped: number }>();
+export const quiet = (key: string, ms = 10 * 60 * 1000): number | null => {
+  const now = Date.now();
+  const q = quietUntil.get(key);
+  if (q && q.until > now) {
+    q.dropped++;
+    return null;
+  }
+  if (quietUntil.size > 10000) quietUntil.clear();
+  quietUntil.set(key, { until: now + ms, dropped: 0 });
+  return q?.dropped ?? 0;
+};
+export const suppressed = (n: number | null) =>
+  n ? `(+${n} similar suppressed)` : "";
+
 export const line = () => {
   const stack = new Error().stack;
   const stackLine = stack.split("\n")[1];

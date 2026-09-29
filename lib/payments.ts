@@ -21,7 +21,7 @@ const isWithdrawLocked = (type: string): string | null => {
 import { generate } from "$lib/invoices";
 import ln from "$lib/ln";
 import { quoteRoutingFee, xpayLayers } from "$lib/lnquote";
-import { err, l, shortError, warn } from "$lib/logging";
+import { err, l, quiet, shortError, suppressed, warn } from "$lib/logging";
 import { handleZap } from "$lib/nostr";
 import { notify, nwcNotify } from "$lib/notifications";
 import { squarePayment } from "$lib/square";
@@ -143,13 +143,19 @@ export const debit = async ({
   if (type !== PaymentType.internal) {
     const lockedKind = isWithdrawLocked(type);
     if (lockedKind) {
-      warn("Blocking", user.username, amount, hash, user.id, type, "withdraw-lock", lockedKind);
+      const n = quiet(`block:${user.id}:lock`, 5 * 60 * 1000);
+      if (n !== null)
+        warn("Blocking", user.username, amount, hash, user.id, type, "withdraw-lock", lockedKind, suppressed(n));
       fail("External withdrawals temporarily disabled");
     }
   }
 
   if (frozen || (amount > userLimit && !whitelisted)) {
-    warn("Blocking", user.username, amount, hash, user.id, type, frozen, userLimit);
+    // Per-account throttle: a frozen throwaway retrying sends every few
+    // seconds is expected noise, one line per 5 min keeps the tripwire.
+    const n = quiet(`block:${user.id}:frozen`, 5 * 60 * 1000);
+    if (n !== null)
+      warn("Blocking", user.username, amount, hash, user.id, type, frozen, userLimit, suppressed(n));
     fail("Problem sending payment");
   }
 
@@ -166,7 +172,9 @@ export const debit = async ({
     await withLimitLock(type, async () => {
       const serverLimit = Number.parseInt((await g(`${type}:limit`)) ?? "0", 10) || 0;
       if (amount > serverLimit) {
-        warn("Blocking", user.username, amount, hash, user.id, type, "serverLimit", serverLimit);
+        const n = quiet(`block:${user.id}:server`, 5 * 60 * 1000);
+        if (n !== null)
+          warn("Blocking", user.username, amount, hash, user.id, type, "serverLimit", serverLimit, suppressed(n));
         fail("Problem sending payment");
       }
       await db.decrBy(`${type}:limit`, amount);

@@ -1,6 +1,7 @@
 import config from "$config";
 import { db } from "$lib/db";
 import { fail, getUser } from "$lib/utils";
+import { quiet, suppressed } from "$lib/logging";
 import fastifyPassport from "@fastify/passport";
 import jwt from "passport-jwt";
 
@@ -70,9 +71,18 @@ export const jwtStrategy = new jwt.Strategy(
     ) {
       // Distinctive, greppable line carrying the real source IP so the realtime
       // auto-banner (scripts/atk-autoban.sh) can insta-ban it at Cloudflare.
-      console.error(
-        `EVICTED_AUTH ${user.username} ${req.headers["cf-connecting-ip"] || req.ip}`,
-      );
+      // Throttled per account. An evicted JWT replayed from a rotating proxy
+      // pool otherwise emits one line per request and
+      // has atk-autoban.sh place a Cloudflare block on every residential IP it
+      // sees, which protects nothing. First hit logs with its IP; afterwards
+      // one summary per 10 minutes, worded so the auto-banner ignores it.
+      const n = quiet(`evicted:${user.id}`);
+      if (n !== null)
+        console.error(
+          n
+            ? `evicted-auth ${user.username} ${suppressed(n)}`
+            : `EVICTED_AUTH ${user.username} ${req.headers["cf-connecting-ip"] || req.ip}`,
+        );
       return next(null, false);
     }
 

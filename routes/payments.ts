@@ -6,7 +6,7 @@ import { generate, getUserOffer } from "$lib/invoices";
 import { replay } from "$lib/lightning";
 import ln from "$lib/ln";
 import { platformFee, quoteMax, quoteRoutingFee } from "$lib/lnquote";
-import { err, l, shortError, warn } from "$lib/logging";
+import { err, l, quiet, shortError, suppressed, warn } from "$lib/logging";
 import mqtt from "$lib/mqtt";
 import {
   build,
@@ -105,8 +105,13 @@ export default {
 
       res.send(p);
     } catch (e) {
-      warn(user.username, "payment failed", amount, balance, hash, payreq);
-      err(shortError(e.message));
+      // One line per account per 5 min: frozen/empty throwaway accounts retry
+      // failed sends in a loop and otherwise dominate the log.
+      const n = quiet(`payfail:${user.id}`, 5 * 60 * 1000);
+      if (n !== null) {
+        warn(user.username, "payment failed", amount, balance, hash, payreq, suppressed(n));
+        err(shortError(e.message));
+      }
       bail(res, e.message);
     }
   },
@@ -710,7 +715,9 @@ export default {
 
       res.send(p);
     } catch (e) {
-      warn(user.username, "payment failed", shortError(e.message));
+      const n = quiet(`payfail:${user.id}`, 5 * 60 * 1000);
+      if (n !== null)
+        warn(user.username, "payment failed", shortError(e.message), suppressed(n));
       res.code(500).send(e.message);
     }
   },
