@@ -84,6 +84,17 @@ export const generate = async ({ invoice, user }) => {
   if (memo && memo.length > 5000) fail("memo too long");
 
   if (!id) id = v4();
+  else {
+    // A caller-supplied id re-uses an existing record (tip/webhook update,
+    // repeated bolt12 offer create). It must be the caller's own: the write
+    // below replaces `invoice:<id>` wholesale with uid = this user, and the
+    // old bolt11 pointer keeps resolving to the same id, so overwriting
+    // another user's invoice re-routes whatever their payer sends into this
+    // account. Same error as a missing invoice so ids can't be probed for
+    // existence.
+    const existing = await getInvoice(id);
+    if (existing && existing.uid !== user.id) fail("invoice not found");
+  }
 
   let hash;
   let text;

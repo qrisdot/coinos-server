@@ -36,6 +36,16 @@ export default {
     else invoice.own = false;
 
     try {
+      // A supplied id that already exists is an UPDATE of that record —
+      // generate() rewrites it wholesale. Only the authenticated owner may do
+      // that. Without this, an anonymous pay-page session passing
+      // body.user = merchant could rewrite the amount/memo of a merchant's
+      // live invoice. generate() separately refuses to move an invoice to a
+      // different uid.
+      if (invoice?.id) {
+        const existing = await getInvoice(invoice.id);
+        if (existing && existing.uid !== req.user.id) fail("invoice not found");
+      }
       const result = await generate({ invoice, user });
       res.send(result);
     } catch (e) {
