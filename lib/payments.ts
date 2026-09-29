@@ -709,6 +709,25 @@ export const sendOnchain = async (params) => {
     const r = await node.testMempoolAccept([hex]);
     if (!r[0].allowed) fail("transaction rejected");
 
+    // Known drain destinations. debit() checks `blocked_addresses` against
+    // its hash, which for an on-chain send is the txid, so the address itself
+    // was never matched here. Refuse before the debit: a drain operator can
+    // fund fresh throwaway accounts and sweep each one on-chain to the same
+    // address, so freezing accounts is a treadmill while the destination is
+    // constant.
+    for (const {
+      scriptPubKey: { address },
+    } of tx.vout) {
+      if (address && (await db.sIsMember("blocked_addresses", address))) {
+        const n = quiet(`blockedaddr:${user.id}`, 5 * 60 * 1000);
+        if (n !== null)
+          err(
+            `SECURITY: blocked on-chain send to ${address} by ${user.username} ${suppressed(n)}`,
+          );
+        fail("address blocked");
+      }
+    }
+
     let total = 0;
     let fee = 0;
     let change = 0;
