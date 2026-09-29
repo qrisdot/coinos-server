@@ -1,6 +1,6 @@
 import { db, g, gf, s } from "$lib/db";
 import { generate } from "$lib/invoices";
-import { err, warn } from "$lib/logging";
+import { err, quiet, suppressed, warn } from "$lib/logging";
 import { serverPubkey2 } from "$lib/nostr";
 import { SATS, bail, fail, getInvoice, getUser } from "$lib/utils";
 import { bech32 } from "bech32";
@@ -18,6 +18,24 @@ const LNURL_TTL = 7 * 24 * 60 * 60;
 const { URL } = process.env;
 const host = URL.split("/").at(-1);
 const fiveMinutes = 1000 * 60 * 5;
+
+// Unauthenticated invoice generation (GET /pay/:user/:amount, GET /lnurl/:id)
+// runs for whoever holds the link, so it needs a per-target budget: a scanner
+// spread across a large proxy pool can mint junk invoices on many accounts
+// (each a CLN invoice plus a :invoices entry) while staying invisible to
+// per-IP limits. 120 fresh invoices per target per hour is far
+// above any static-QR merchant's scan rate; reusing an existing invoice (the
+// own-invoice path in pay(), the pinned invoice in lnurl()) doesn't count.
+const unauthInvoiceBudget = async (uid: string) => {
+  const key = `invbudget:${uid}`;
+  const n = await db.incr(key);
+  if (n === 1) await db.expire(key, 3600);
+  if (n > 120) {
+    const q = quiet(`invbudget:${uid}`);
+    if (q !== null) warn("invoice budget exceeded", uid, n, suppressed(q));
+    fail("Too many payment requests for this user, try again later");
+  }
+};
 // v3 payment addresses (coinos v3 / halwallet) are registered here.
 const NAMES_URL = process.env.NAMES_URL || "https://names.coinos.io";
 
@@ -142,8 +160,11 @@ export default {
         tag: "payRequest",
       });
     } catch (e) {
-      if (!e.message.includes("found"))
-        warn("problem generating lnurlp request", username, e.message);
+      if (!e.message.includes("found")) {
+        const n = quiet(`lnurlp:${username}`, 5 * 60 * 1000);
+        if (n !== null)
+          warn("problem generating lnurlp request", username, e.message, suppressed(n));
+      }
       bail(res, e.message);
     }
   },
@@ -181,6 +202,7 @@ export default {
         }
       }
 
+      if (!iid) await unauthInvoiceBudget(user.id);
       const invoice = iid
         ? await gf(`invoice:${iid}`)
         : await generate({
@@ -239,12 +261,14 @@ export default {
     const { amount, username } = req.params;
     try {
       const user = await getUser(username);
+      if (!user) fail(`User ${username} not found`);
 
       const invoices = await db.lRange(`${user.id}:invoices`, 0, 10);
       let invoice;
 
       for (const iid of invoices) {
         const i = await getInvoice(iid);
+        if (!i) continue;
         const paid = i.amount > 0 && i.received >= i.amount;
         const old = Date.now() - i.created > fiveMinutes;
         if (paid) break;
@@ -256,6 +280,7 @@ export default {
 
       if (invoice) {
         if (amount?.startsWith("+")) {
+          await unauthInvoiceBudget(user.id);
           const tip = invoice.amount * amount.split("+")[1];
           invoice = await generate({
             invoice: {
@@ -266,6 +291,7 @@ export default {
           });
         }
       } else {
+        await unauthInvoiceBudget(user.id);
         invoice = await generate({
           invoice: {
             amount,
@@ -302,8 +328,11 @@ export default {
         tag: "payRequest",
       });
     } catch (e) {
-      if (!e.message.includes("found"))
-        warn("problem generating lnurlp request", username, e.message);
+      if (!e.message.includes("found")) {
+        const n = quiet(`lnurlp:${username}`, 5 * 60 * 1000);
+        if (n !== null)
+          warn("problem generating lnurlp request", username, e.message, suppressed(n));
+      }
       bail(res, e.message);
     }
   },
