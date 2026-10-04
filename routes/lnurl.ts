@@ -138,7 +138,10 @@ export default {
       if (v3) return res.send(v3);
 
       const user = await getUser(name);
-      if (!user) fail(`User ${username} not found`);
+      // Evicted accounts can't receive either: stops a lightning address that
+      // a scam page points victims at from issuing new invoices.
+      if (!user || (await db.sIsMember("evicted", user.id)))
+        fail(`User ${username} not found`);
       const { id: uid } = user;
 
       const metadata = JSON.stringify([
@@ -179,7 +182,8 @@ export default {
       const uid = await g(`lnurl:${id}`);
       const user = await getUser(uid);
 
-      if (!user) fail("user not found");
+      if (!user || (await db.sIsMember("evicted", user.id)))
+        fail("user not found");
       let { username } = user;
       username = username.replace(/\s/g, "").toLowerCase();
 

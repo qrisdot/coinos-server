@@ -178,7 +178,13 @@ export const debit = async ({
         const n = quiet(`block:${user.id}:server`, 5 * 60 * 1000);
         if (n !== null)
           warn("Blocking", user.username, amount, hash, user.id, type, "serverLimit", serverLimit, suppressed(n));
-        fail("Problem sending payment");
+        // Say what's happening (users read the generic error as "account
+        // frozen") without revealing the limit or the hot-wallet balance.
+        fail(
+          type === PaymentType.bitcoin || type === PaymentType.liquid
+            ? "On-chain withdrawals are temporarily limited. Please try a smaller amount, send over Lightning, or try again later."
+            : "Payments are temporarily limited. Please try a smaller amount or try again later.",
+        );
       }
       await db.decrBy(`${type}:limit`, amount);
     });

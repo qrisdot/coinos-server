@@ -482,6 +482,11 @@ export default {
         }
       }
 
+      // Evicted accounts can't use a token anyway (see lib/auth.ts), so don't
+      // mint one — checked after the password so it can't be used to probe.
+      if (!isAdmin && (await db.sIsMember("evicted", user.id)))
+        return res.code(403).send("account disabled");
+
       if (username !== "coinos")
         l("logged in", username, req.headers["cf-connecting-ip"]);
 
