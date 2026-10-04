@@ -40,6 +40,7 @@ import {
   t,
 } from "$lib/utils";
 import { callWebhook } from "$lib/webhooks";
+import { maybeForwardToV3, retryV3Forwards } from "$lib/v3forward";
 import changeid from "$lib/changeid";
 import rpc from "@coinos/rpc";
 import { bech32 } from "bech32";
@@ -111,6 +112,8 @@ export const debit = async ({
   user,
   type = PaymentType.internal,
   rate = undefined,
+  // a v3 bridge forward (lib/v3forward.ts) costs routing only
+  exempt = false,
   maxTotal = undefined,
 }) => {
   amount = Number.parseInt(amount);
@@ -245,7 +248,7 @@ export const debit = async ({
     ? Math.round((amount + fee + tip) * feeRate)
     : 0;
 
-  if (aid !== uid) ourfee = 0;
+  if (aid !== uid || exempt) ourfee = 0;
 
   // NWC and other delegated spenders can provide the exact allowance remaining
   // for this call. Enforce it only after debit has reloaded the invoice and
@@ -533,10 +536,17 @@ export const credit = async ({
   return p;
 };
 
+const forwardSend = (o) => sendLightning({ ...o, exempt: true });
+// failed forwards retry with backoff; one process works the queue at a time
+setInterval(() => retryV3Forwards(forwardSend).catch(() => {}), 60_000).unref();
+
 export const completePayment = async (inv, p, user) => {
   const { id, autowithdraw, threshold, reserve, destination, username } = user;
   let withdrawal;
-  if (p.confirmed) {
+  // A name that moved to coinos v3: the receive is paid on to the v3 wallet
+  // (lib/v3forward.ts), and legacy autowithdraw stands down for it.
+  const forwarded = await maybeForwardToV3(p, user, forwardSend);
+  if (p.confirmed && !forwarded) {
     if (autowithdraw) {
       try {
         const to = destination.trim();
@@ -945,6 +955,7 @@ export const sendLightning = async ({
   memo = undefined,
   payerNote = undefined,
   maxTotal = undefined,
+  exempt = false,
 }) => {
   let p;
 
@@ -1049,6 +1060,7 @@ export const sendLightning = async ({
     user,
     type: PaymentType.lightning,
     maxTotal,
+    exempt,
   });
 
   await db.sAdd("pending", pr);
