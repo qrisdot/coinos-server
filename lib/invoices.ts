@@ -57,7 +57,12 @@ export const generate = async ({ invoice, user }) => {
   if (!user) fail("user not provided");
   if (typeof prompt === "undefined") prompt = user.prompt;
 
-  let account = await g(`account:${aid}`);
+  // The invoice shows `user`'s name but credits `aid`, so a supplied aid must
+  // be one of that user's own accounts — otherwise anyone could put a
+  // merchant's name on an invoice that pays their own account.
+  if (aid && aid !== user.id && (await db.lPos(`${user.id}:accounts`, aid)) === null)
+    aid = undefined;
+  let account = aid ? await g(`account:${aid}`) : null;
   if (!account) account = await g(`account:${user.id}`);
   if (!account) fail("account not found");
   aid = account.id;
