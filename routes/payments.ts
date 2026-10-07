@@ -66,6 +66,11 @@ export default {
       if (payreq != null && typeof payreq !== "string")
         fail("Invalid payment request");
       if (hash != null && typeof hash !== "string") fail("Invalid invoice");
+      // Invoices are keyed lowercase. An uppercase payreq (QR-scanned) missed
+      // the lookup below and was paid over cl to ourselves instead of
+      // internally; the listener then found the sender's payment:<bolt11>
+      // pointer and skipped crediting the recipient.
+      if (payreq) payreq = payreq.replace(/\s/g, "").toLowerCase();
 
       if (typeof amount !== "undefined") {
         amount = Number.parseInt(amount);

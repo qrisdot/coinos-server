@@ -634,7 +634,13 @@ const checkBudget = async (app, amount) => {
 const handle = (method, params, ev, app, user) =>
   ({
     async pay_invoice() {
-      const { invoice: pr, metadata, amount: reqAmountMsat } = params;
+      const { metadata, amount: reqAmountMsat } = params;
+      // Lowercase so getInvoice() finds our own invoices below (see create()
+      // in routes/payments.ts).
+      const pr =
+        typeof params.invoice === "string"
+          ? params.invoice.replace(/\s/g, "").toLowerCase()
+          : params.invoice;
       const { amount_msat, payee } = await ln.decode(pr);
       const { id } = await ln.getinfo();
       // For an amountless bolt11, the invoice carries no amount — NIP-47 lets the
