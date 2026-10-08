@@ -4,10 +4,11 @@
 // (not raw request volume, which is dominated by datacenter/bot traffic).
 //
 // Usage: bun scripts/analytics-geo.ts [--days N] [--top N]
-// Streams ~/coinos-server/req (pino JSONL, multi-GB) — never loads it whole.
+// Streams the request log (pino JSONL, multi-GB) — never loads it whole.
 
 import { createInterface } from "readline";
-import { createReadStream } from "fs";
+import { createReadStream, readdirSync } from "fs";
+import { createGunzip } from "zlib";
 
 const argDays = Number(process.argv[process.argv.indexOf("--days") + 1]) || 30;
 const TOP = Number(process.argv[process.argv.indexOf("--top") + 1]) || 25;
@@ -18,10 +19,29 @@ const cutoff = Date.now() - argDays * 24 * 60 * 60 * 1000;
 // for sequential usernames (bugtraq, bugtraqq, ...) in the last 30d.
 const BOT_IPS = new Set<string>(["195.123.220.232"]);
 
-const rl = createInterface({
-  input: createReadStream("/home/adam/coinos-server/req"),
-  crlfDelay: Infinity,
-});
+
+// The live log rotates into 50M dated chunks under reqlogs/ (named for when
+// they were rotated out, gzipped except the newest), so stream every chunk
+// rotated within the window, oldest first, then the live file.
+const REQ = "/home/adam/coinos-server/req";
+const REQLOGS = "/home/adam/coinos-server/reqlogs";
+const chunkTime = (f: string) => {
+  const m = f.match(/^req-(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})(\d{2})?/);
+  return m ? new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +(m[6] || 0)).getTime() : 0;
+};
+async function* reqLines(since: number) {
+  const files = readdirSync(REQLOGS)
+    .filter((f) => chunkTime(f) >= since)
+    .sort((a, b) => chunkTime(a) - chunkTime(b) || a.localeCompare(b))
+    .map((f) => `${REQLOGS}/${f}`);
+  for (const path of [...files, REQ]) {
+    const raw = createReadStream(path);
+    const input = path.endsWith(".gz") ? raw.pipe(createGunzip()) : raw;
+    yield* createInterface({ input, crlfDelay: Infinity });
+  }
+}
+
+const rl = reqLines(cutoff);
 
 // We only trust /login and /register events for geography: they are real human
 // auth actions tied to a username in the body, from the user's actual device.
