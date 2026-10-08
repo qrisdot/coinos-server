@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import config from "$config";
 import { requirePin } from "$lib/auth";
-import { db, g, ga, gf, s } from "$lib/db";
+import { db, g, gf, s } from "$lib/db";
 import { err, l, warn } from "$lib/logging";
 import { mail, templates } from "$lib/mail";
 import { getNostrUser, getProfile, serverPubkey2 } from "$lib/nostr";
@@ -101,21 +101,6 @@ export default {
     const { user } = req;
     try {
       user.balance = await g(`balance:${user.id}`);
-      user.locked = await ga(`balance:${user.id}`);
-
-      if (user.locked) {
-        const blacklisted = await db.sIsMember(
-          "blacklist",
-          user?.username?.toLowerCase().trim(),
-        );
-
-        const whitelisted = await db.sIsMember(
-          "whitelist",
-          user?.username?.toLowerCase().trim(),
-        );
-
-        if (!blacklisted || whitelisted) user.locked = 0;
-      }
 
       user.prompt = !!user.prompt;
       if (user.pubkey) user.npub = nip19.npubEncode(user.pubkey);
