@@ -101,6 +101,10 @@ export default {
     const { user } = req;
     try {
       user.balance = await g(`balance:${user.id}`);
+      // The password-encrypted nostr key is only handed out by /login, after
+      // the password (and 2FA) check. A bearer token alone mustn't be enough
+      // to fetch it and brute-force or decrypt it offline.
+      user.hasnsec = !!user.nsec;
 
       user.prompt = !!user.prompt;
       if (user.pubkey) user.npub = nip19.npubEncode(user.pubkey);
@@ -197,7 +201,7 @@ export default {
 
       l("registered new user", user.username);
 
-      res.send({ ...pick(user, whitelist), sk: user.sk, token });
+      res.send({ ...pick(user, whitelist), nsec: user.nsec, sk: user.sk, token });
     } catch (e) {
       err("problem registering", e.message);
       res.code(500).send(e.message);
@@ -214,7 +218,10 @@ export default {
       return res.code(401).send("2fa required");
     }
 
+    // Fresh seed on disable so a seed that leaked while 2FA was on is dead
+    // when it's re-enabled.
     user.twofa = false;
+    user.otpsecret = authenticator.generateSecret();
     await s(`user:${id}`, user);
     emit(username, "user", pick(user, whitelist));
     emit(username, "otpsecret", user.otpsecret);
@@ -484,7 +491,7 @@ export default {
         secure: true,
         sameSite: "lax",
       });
-      user = pick(user, whitelist);
+      user = { ...pick(user, whitelist), hasnsec: !!user.nsec, nsec: user.nsec };
       res.send({ user, token });
     } catch (e) {
       err("login error", e.message, req.socket.remoteAddress);
@@ -552,7 +559,7 @@ export default {
         secure: true,
         sameSite: "lax",
       });
-      user = pick(user, whitelist);
+      user = { ...pick(user, whitelist), hasnsec: !!user.nsec };
       res.send({ user, token });
     } catch (e) {
       err("nostr login error", e.message, req.socket.remoteAddress);
@@ -618,6 +625,10 @@ export default {
   async otpsecret(req, res) {
     try {
       await requirePin(req);
+      // Only needed to enrol. Once 2FA is on, the seed never leaves the
+      // server again — otherwise a stolen token on a PIN-less account is
+      // enough to mint valid codes.
+      if (req.user.twofa) fail("2FA is already enabled");
       const { otpsecret, username } = req.user;
       res.send({ secret: otpsecret, username });
     } catch (e) {
