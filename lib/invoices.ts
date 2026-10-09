@@ -44,6 +44,7 @@ export const generate = async ({ invoice, user }) => {
     memo,
     memoPrompt,
     prompt,
+    single_use,
     type = PaymentType.lightning,
     usePreimage,
     webhook,
@@ -195,10 +196,18 @@ export const generate = async ({ invoice, user }) => {
     if (bolt12) fail("Cannot provide your own bolt12 invoice");
     let r;
     {
+      // The offer itself has to carry the expiry: CLN keeps answering
+      // invoice requests for an offer until its absolute_expiry, so an
+      // expiry only stored on our invoice record was never enforced.
+      expiry = Number.parseInt(expiry) || undefined;
       r = await ln.offer({
         amount: amount ? `${amount + tip}sat` : "any",
         label: `${id} ${user.username} ${new Date()}`,
         description: memo || id,
+        absolute_expiry: expiry
+          ? Math.floor(Date.now() / 1000) + expiry
+          : undefined,
+        single_use: !!single_use || undefined,
       });
 
       // CLN returns the same offer_id for identical offer contents, so a
