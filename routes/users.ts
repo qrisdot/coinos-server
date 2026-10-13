@@ -610,6 +610,39 @@ export default {
     }
   },
 
+  // The encrypted nostr key, for clients that need to reveal or sign with it
+  // after a session that didn't start with a password login. Re-checking the
+  // password keeps a bearer token alone from fetching it (see /me).
+  async nsec(req, res) {
+    const {
+      body: { password },
+      user,
+    } = req;
+    const ip = req.headers["cf-connecting-ip"] || req.socket.remoteAddress;
+    const ipFailKey = `ip:${ip}:login:fail`;
+
+    try {
+      if (!user.nsec) fail("nsec not available");
+      if ((await g(ipFailKey)) > 20) return res.code(429).send({});
+
+      let verified = false;
+      try {
+        if (user.password && password)
+          verified = await Bun.password.verify(password, user.password);
+      } catch (e) {}
+
+      if (!verified) {
+        await db.incrBy(ipFailKey, 1);
+        if ((await db.ttl(ipFailKey)) < 0) await db.expire(ipFailKey, 600);
+        return res.code(401).send("invalid password");
+      }
+
+      res.send({ nsec: user.nsec });
+    } catch (e) {
+      bail(res, e.message);
+    }
+  },
+
   async pin(req, res) {
     const {
       body: { pin },

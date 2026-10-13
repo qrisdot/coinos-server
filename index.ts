@@ -183,6 +183,7 @@ app.get("/subscriptions", auth, users.subscriptions);
 app.post("/subscription", auth, users.subscription);
 app.post("/subscription/delete", auth, users.deleteSubscription);
 app.post("/password", auth, users.password);
+app.post("/nsec", auth, users.nsec);
 app.post("/pin", auth, users.pin);
 app.post("/otpsecret", auth, users.otpsecret);
 app.get("/contacts/:limit?", auth, users.contacts);
