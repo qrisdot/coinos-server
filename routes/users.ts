@@ -425,8 +425,6 @@ export default {
       username = username.toLowerCase().replace(/\s/g, "");
       username = username.split("@")[0];
 
-      const fk = `${username}:failures`;
-      const failures = await g(fk);
       const ipFailKey = `ip:${ip}:login:fail`;
       const ipFailures = await g(ipFailKey);
       if (!isAdmin && ipFailures > 20) return res.code(429).send({});
@@ -443,8 +441,6 @@ export default {
         if (!user || !verified) {
           await db.incrBy(ipFailKey, 1);
           if ((await db.ttl(ipFailKey)) < 0) await db.expire(ipFailKey, 600);
-          await db.incrBy(fk, 1);
-          setTimeout(() => db.decrBy(fk, 1), 120000);
           return res.code(401).send({});
         }
 
@@ -868,9 +864,6 @@ export default {
 
       await s(`user:${id}`, user);
       await db.del(`reset:${code}`);
-
-      const un = username.toLowerCase().replace(/\s/g, "");
-      await db.del(`${un}:failures`);
 
       res.send(pick(user, whitelist));
 
