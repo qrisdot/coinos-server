@@ -22,6 +22,9 @@ const FAKE_NODE =
 
 const XPAY_MAXDELAY = 2016; // xpay's default maxdelay
 
+// How long a quote layer outlives a getroutes call that timed out on our side
+const LAYER_REMOVE_DELAY = 10 * 60_000;
+
 // Extra layers sendLightning passes to xpay. xpay forwards user layers to
 // getroutes verbatim, and getroutes rejects an unknown layer outright, so only
 // pass the ones that actually exist on this node (prod has prefer-kappa,
@@ -173,6 +176,12 @@ export const quoteRoutingFee = async ({
   }
 
   const layer = `quote-${v4()}`;
+  // True while a getroutes on this layer may still be queued inside askrene.
+  // askrene runs at most 4 route computations at once and checks layer names
+  // only on arrival; a queued request whose layer was removed in the meantime
+  // trips an assert in apply_layers that aborts lightningd. When our RPC times
+  // out the request is still in that queue, so the layer has to outlive it.
+  let routing = false;
   try {
     await ln.call("askrene-create-layer", { layer, persistent: false });
     for (const f of fakes) {
@@ -195,6 +204,7 @@ export const quoteRoutingFee = async ({
       });
     }
 
+    routing = true;
     const r = await ln.call("getroutes", {
       source: me,
       destination,
@@ -211,7 +221,12 @@ export const quoteRoutingFee = async ({
       maxfee_msat: cap,
       final_cltv: finalCltv,
       maxdelay: XPAY_MAXDELAY,
+    }).catch((e) => {
+      // Any reply from askrene, error or not, means it is done with the layer
+      if (e?.code !== "ETIMEDOUT") routing = false;
+      throw e;
     });
+    routing = false;
 
     const routes: any[] = r?.routes ?? [];
     if (!routes.length) fail("No route found");
@@ -232,11 +247,15 @@ export const quoteRoutingFee = async ({
     const feeMsat = Math.max(0, sent - delivered);
     return { fee: Math.ceil(feeMsat / 1000), feeMsat, parts: routes.length };
   } finally {
-    try {
-      await ln.call("askrene-remove-layer", { layer });
-    } catch (e: any) {
-      warn("askrene-remove-layer failed", layer, e?.message ?? String(e));
-    }
+    const remove = async () => {
+      try {
+        await ln.call("askrene-remove-layer", { layer });
+      } catch (e: any) {
+        warn("askrene-remove-layer failed", layer, e?.message ?? String(e));
+      }
+    };
+    if (routing) setTimeout(remove, LAYER_REMOVE_DELAY);
+    else await remove();
   }
 };
 
