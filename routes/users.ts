@@ -5,6 +5,7 @@ import config from "$config";
 import { requirePin } from "$lib/auth";
 import { db, g, gf, s } from "$lib/db";
 import { err, l, warn } from "$lib/logging";
+import { upgradeLegacyNsec } from "$lib/legacynsec";
 import { mail, templates } from "$lib/mail";
 import { getNostrUser, getProfile, serverPubkey2 } from "$lib/nostr";
 import register from "$lib/register";
@@ -104,7 +105,7 @@ export default {
       // The password-encrypted nostr key is only handed out by /login, after
       // the password (and 2FA) check. A bearer token alone mustn't be enough
       // to fetch it and brute-force or decrypt it offline.
-      user.hasnsec = !!user.nsec;
+      user.hasnsec = !!(user.nsec || user.cipher);
 
       user.prompt = !!user.prompt;
       if (user.pubkey) user.npub = nip19.npubEncode(user.pubkey);
@@ -461,13 +462,17 @@ export default {
           user.password.match(/^\$2[aby]\$(\d{2})\$/)?.[1] ?? "0",
           10,
         );
+        let changed = false;
         if (cost < 12) {
           user.password = await Bun.password.hash(password, {
             algorithm: "bcrypt",
             cost: 12,
           });
-          await s(`user:${user.id}`, user);
+          changed = true;
         }
+
+        if (await upgradeLegacyNsec(user, password)) changed = true;
+        if (changed) await s(`user:${user.id}`, user);
       }
 
       // Evicted accounts can't use a token anyway (see lib/auth.ts), so don't
@@ -487,7 +492,7 @@ export default {
         secure: true,
         sameSite: "lax",
       });
-      user = { ...pick(user, whitelist), hasnsec: !!user.nsec, nsec: user.nsec };
+      user = { ...pick(user, whitelist), hasnsec: !!(user.nsec || user.cipher), nsec: user.nsec };
       res.send({ user, token });
     } catch (e) {
       err("login error", e.message, req.socket.remoteAddress);
@@ -555,7 +560,7 @@ export default {
         secure: true,
         sameSite: "lax",
       });
-      user = { ...pick(user, whitelist), hasnsec: !!user.nsec };
+      user = { ...pick(user, whitelist), hasnsec: !!(user.nsec || user.cipher) };
       res.send({ user, token });
     } catch (e) {
       err("nostr login error", e.message, req.socket.remoteAddress);
@@ -622,7 +627,7 @@ export default {
     const ipFailKey = `ip:${ip}:login:fail`;
 
     try {
-      if (!user.nsec) fail("nsec not available");
+      if (!user.nsec && !user.cipher) fail("nsec not available");
       if ((await g(ipFailKey)) > 20) return res.code(429).send({});
 
       let verified = false;
@@ -636,6 +641,9 @@ export default {
         if ((await db.ttl(ipFailKey)) < 0) await db.expire(ipFailKey, 600);
         return res.code(401).send("invalid password");
       }
+
+      if (await upgradeLegacyNsec(user, password)) await s(`user:${user.id}`, user);
+      if (!user.nsec) fail("nsec could not be decrypted");
 
       res.send({ nsec: user.nsec });
     } catch (e) {
@@ -889,6 +897,8 @@ export default {
 
       user.pin = null;
       user.nsec = null;
+      user.cipher = null;
+      user.salt = null;
 
       user.password = await Bun.password.hash(password, {
         algorithm: "bcrypt",
