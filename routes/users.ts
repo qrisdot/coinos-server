@@ -5,6 +5,7 @@ import config from "$config";
 import { requirePin } from "$lib/auth";
 import { db, g, gf, s } from "$lib/db";
 import { err, l, warn } from "$lib/logging";
+import { isDefaultName } from "$lib/default-names";
 import { upgradeLegacyNsec } from "$lib/legacynsec";
 import { mail, templates } from "$lib/mail";
 import { getNostrUser, getProfile, serverPubkey2 } from "$lib/nostr";
@@ -30,13 +31,23 @@ import type { ProfilePointer } from "nostr-tools/nip19";
 const { host } = new URL(process.env.URL);
 const relay = encodeURIComponent(config.publicRelay);
 
-const verifyRecaptcha = async (response, req?) => {
+// reCAPTCHA v3 is score-based: siteverify answers success:true for any
+// validly minted token, bot or not, and puts the verdict in `score` (0 = bot,
+// 1 = human). Checking `success` alone let a headless-browser signup wave
+// through on 2026-10-18 with a fresh token on every request. `actions` and
+// the hostname check stop a token minted for another page or site from being
+// replayed here.
+const verifyRecaptcha = async (
+  response,
+  req?,
+  { actions = [] as string[], minScore = 0 } = {},
+) => {
   const { recaptcha: secret } = config;
   if (!secret) return true;
 
   // Skip captcha for Tor users accessing via .onion
-  const host = req?.headers?.["x-forwarded-host"] || req?.headers?.["host"] || "";
-  if (host.endsWith(".onion")) return true;
+  const reqHost = req?.headers?.["x-forwarded-host"] || req?.headers?.["host"] || "";
+  if (reqHost.endsWith(".onion")) return true;
 
   // Skip captcha for allowlisted User-Agents (prefix match)
   const uaRaw = req?.headers?.["user-agent"] || req?.headers?.["User-Agent"];
@@ -65,7 +76,7 @@ const verifyRecaptcha = async (response, req?) => {
 
   try {
     const ip = req?.headers?.["cf-connecting-ip"] || req?.socket?.remoteAddress;
-    const { success } = await got
+    const { success, score, action, hostname } = await got
       .post("https://www.google.com/recaptcha/api/siteverify", {
         form: {
           secret,
@@ -78,7 +89,22 @@ const verifyRecaptcha = async (response, req?) => {
       .json();
     // A real verdict from Google: fail CLOSED only when the captcha itself is
     // invalid (success === false).
-    return success || (!!config.adminpass && response === config.adminpass);
+    if (!!config.adminpass && response === config.adminpass) return true;
+    if (!success) return false;
+    if (hostname && hostname !== host && !hostname.endsWith(`.${host}`)) {
+      warn("recaptcha wrong hostname", ip, hostname);
+      return false;
+    }
+    if (actions.length && !actions.includes(action)) {
+      warn("recaptcha wrong action", ip, action);
+      return false;
+    }
+    if (action === "register") l("recaptcha register score", ip, score);
+    if (typeof score === "number" && score < minScore) {
+      warn("recaptcha low score", ip, action, score);
+      return false;
+    }
+    return true;
   } catch (e) {
     // Fail OPEN on an INFRASTRUCTURE error (network blip, timeout, Google 5xx).
     // Reaching Google is not part of authentication; failing closed here turned
@@ -92,6 +118,26 @@ const verifyRecaptcha = async (response, req?) => {
       (e as any)?.code ?? (e as any)?.message ?? String(e),
     );
     return true;
+  }
+};
+
+// Cloudflare Turnstile, on trial next to reCAPTCHA for the signup page:
+// reCAPTCHA v3 scores the 2026-10 farm 0.9, so this only logs its verdict
+// until we've seen whether it tells the farm apart. Returns null when the
+// verifier can't be reached so callers can tell "unknown" from "failed".
+const verifyTurnstile = async (token, ip) => {
+  if (!config.turnstile || !token) return null;
+  try {
+    const r: any = await got
+      .post("https://challenges.cloudflare.com/turnstile/v0/siteverify", {
+        form: { secret: config.turnstile, response: token, remoteip: ip },
+        timeout: { request: 6000 },
+      })
+      .json();
+    return r;
+  } catch (e) {
+    warn("turnstile verify unreachable", (e as any)?.code ?? String(e));
+    return null;
   }
 };
 
@@ -164,6 +210,32 @@ export default {
           warn("registration cap hit", ip, n);
           fail("Too many accounts created from this address, try again later");
         }
+
+        // Same idea one level up: a residential proxy pool hands out a fresh
+        // address per request, but they cluster in a few ISP ranges. All
+        // signups site-wide normally run ~25/hour, so 10/hour from one IPv4
+        // /16 or IPv6 /48 only bites a farm.
+        const range = ip.includes(":")
+          ? ip.split(":").slice(0, 3).join(":")
+          : ip.split(".").slice(0, 2).join(".");
+        const rk = `register:range:${range}`;
+        const rn = await db.incr(rk);
+        if (rn === 1) await db.expire(rk, 3600);
+        if (rn > 10) {
+          warn("registration range cap hit", ip, range, rn);
+          fail("Too many accounts created from this network, try again later");
+        }
+
+        // The farm came back spread over ~90 ranges an hour, each staying
+        // under the hourly cap, so also cap a range per day. Counted on
+        // attempts that got past the hourly caps.
+        const dk = `register:range:day:${range}`;
+        const dn = await db.incr(dk);
+        if (dn === 1) await db.expire(dk, 86400);
+        if (dn > 5) {
+          warn("registration daily range cap hit", ip, range, dn);
+          fail("Too many accounts created from this network, try again later");
+        }
       }
 
       // Forged browser User-Agent. Every engine that reports AppleWebKit also
@@ -189,9 +261,56 @@ export default {
       // had one and requiring it would break them. verifyRecaptcha keeps its
       // own bypasses (onion host, x-api-key, allowlisted UA) and fails open
       // when Google is unreachable.
-      if (user.recaptcha && !(await verifyRecaptcha(user.recaptcha, req))) {
+      // Our own signup page (SSR, Bun UA) always sends a token on the
+      // clearnet; only the .onion page, which reaches us without a
+      // cf-connecting-ip, and the fund sweep (internal x-api-key, bypassed
+      // inside verifyRecaptcha) legitimately don't. So from the web UI an
+      // absent token is a scripted submit, not an API client.
+      if (!user.recaptcha && ip && ua.startsWith("Bun/")) {
+        if (!(await verifyRecaptcha(undefined, req))) {
+          warn("registration blocked, missing captcha", ip, user.username);
+          fail("Failed captcha");
+        }
+      }
+
+      if (
+        user.recaptcha &&
+        !(await verifyRecaptcha(user.recaptcha, req, {
+          actions: ["register"],
+          minScore: 0.5,
+        }))
+      ) {
         warn("registration blocked, failed captcha", ip, user.username);
         fail("Failed captcha");
+      }
+
+      if (ip && ua.startsWith("Bun/")) {
+        const t = await verifyTurnstile(user.turnstile, ip);
+        l(
+          "turnstile register",
+          ip,
+          user.username,
+          !user.turnstile
+            ? "missing"
+            : t
+              ? `${t.success ? "pass" : "fail"} ${t.hostname || ""} ${(t["error-codes"] || []).join(",")}`
+              : "unverified",
+        );
+      }
+
+      // Site-wide cap on signups that kept the auto-filled animal+NN name.
+      // The 2026-10 farm passes reCAPTCHA (0.9) and Cloudflare's challenge
+      // from thousands of residential IPs, but never changes the default
+      // name; real users keep it ~8 times a day. Hitting the cap only asks
+      // for a different name.
+      if (isDefaultName(user.username)) {
+        const k = `register:default:${Math.floor(Date.now() / 3600000)}`;
+        const n = await db.incr(k);
+        if (n === 1) await db.expire(k, 7200);
+        if (n > 10) {
+          warn("registration default-name cap hit", ip, user.username, n);
+          fail("Please choose your own username");
+        }
       }
 
       const fields = ["pubkey", "password", "username", "picture", "fresh"];
@@ -417,7 +536,10 @@ export default {
         !!config?.adminpass && !!password && password === config.adminpass;
 
       if (!isAdmin) {
-        const recaptchaOk = await verifyRecaptcha(recaptcha, req);
+        const recaptchaOk = await verifyRecaptcha(recaptcha, req, {
+          actions: ["login", "register"],
+          minScore: 0.3,
+        });
         if (!recaptchaOk) {
           return res.code(401).send("failed captcha");
         }
@@ -510,7 +632,10 @@ export default {
     try {
       const { event, challenge, twofa, recaptcha } = req.body;
       const ip = req.headers["cf-connecting-ip"];
-      const recaptchaOk = await verifyRecaptcha(recaptcha, req);
+      const recaptchaOk = await verifyRecaptcha(recaptcha, req, {
+        actions: ["login", "register"],
+        minScore: 0.3,
+      });
       if (!recaptchaOk) {
         return res.code(401).send("failed captcha");
       }
