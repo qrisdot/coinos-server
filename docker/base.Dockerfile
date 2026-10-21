@@ -1,10 +1,12 @@
 FROM debian:trixie-slim
 
+ARG BUN_VERSION=1.3.11
+
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl unzip ca-certificates wget \
     libpq5 libsodium23 libatomic1 jq socat inotify-tools \
     liblmdb0 libsecp256k1-2 tini \
-    && curl -fsSL https://bun.sh/install | bash \
+    && curl -fsSL https://bun.sh/install | bash -s "bun-v${BUN_VERSION}" \
     && mv /root/.bun/bin/bun /usr/local/bin/bun \
     && ln -s /usr/local/bin/bun /usr/local/bin/bunx \
     && rm -rf /root/.bun \
