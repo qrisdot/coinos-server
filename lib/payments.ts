@@ -1011,6 +1011,11 @@ export const sendLightning = async ({
 
   const amt = amount_msat ? Math.round(amount_msat / 1000) : amount;
 
+  // Bots retrying sends against an empty account would otherwise cost an
+  // askrene query each. debit() below is still the authoritative check.
+  if (amt > (Number.parseInt(await g(`balance:${user.id}`)) || 0))
+    fail(t(user).insufficientFunds);
+
   // Ask askrene up front what routing this will cost — the same query xpay
   // runs — so the maxfee we reserve is the real fee, not a guess. A caller
   // that names its own cap keeps it (finalize refunds whatever xpay doesn't
@@ -1022,7 +1027,9 @@ export const sendLightning = async ({
   try {
     ({ fee: quoted } = await quoteRoutingFee({ pr, amount: amt }));
   } catch (e: any) {
-    warn("route quote failed", pr.substr(-8), shortError(e?.message));
+    const n = quiet(`quotefail:${user.id}`, 5 * 60 * 1000);
+    if (n !== null)
+      warn("route quote failed", user.username, pr.substr(-8), shortError(e?.message), suppressed(n));
   }
 
   const explicit = Number.parseInt(fee);
