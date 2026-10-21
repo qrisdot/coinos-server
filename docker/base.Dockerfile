@@ -1,3 +1,4 @@
+# docker build -f docker/base.Dockerfile -t ghcr.io/coinos/base docker/
 FROM debian:trixie-slim
 
 ARG BUN_VERSION=1.4.3
@@ -15,6 +16,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/* \
        /usr/share/doc /usr/share/man /usr/share/locale \
        /usr/share/info /var/log/* /tmp/*
+
+COPY bun-distrust.ts /tmp/
+RUN cp /usr/local/bin/bun /tmp/bun \
+    && /tmp/bun /tmp/bun-distrust.ts /usr/local/bin/bun \
+    && rm /tmp/bun /tmp/bun-distrust.ts
 
 RUN groupadd -g 1000 bun && useradd -u 1000 -g bun -m -s /bin/sh bun
 WORKDIR /home/bun/app
