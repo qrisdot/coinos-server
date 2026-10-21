@@ -14,7 +14,8 @@ const distrust = {
 };
 
 const bin = process.argv[2];
-let buf = readFileSync(bin);
+const buf = readFileSync(bin);
+let patched = false;
 
 for (const [cn, placeholder] of Object.entries(distrust)) {
   const pem = getCACertificates("bundled").find(
@@ -32,7 +33,8 @@ for (const [cn, placeholder] of Object.entries(distrust)) {
   if (at < 0 || buf.indexOf(der, at + 1) >= 0)
     throw new Error(`${cn}: expected exactly one copy in ${bin}`);
   repl.copy(buf, at);
+  patched = true;
   console.log(`${cn}: replaced at offset ${at}`);
 }
 
-writeFileSync(bin, buf);
+if (patched) writeFileSync(bin, buf);
