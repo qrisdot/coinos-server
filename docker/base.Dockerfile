@@ -1,6 +1,6 @@
 FROM debian:trixie-slim
 
-ARG BUN_VERSION=1.3.11
+ARG BUN_VERSION=1.4.3
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl unzip ca-certificates wget \
