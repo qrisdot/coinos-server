@@ -1264,6 +1264,8 @@ export default {
   async app(req, res) {
     const { pubkey } = req.params;
     const { user } = req;
+    if (!/^[0-9a-f]{64}$/.test(pubkey))
+      return res.code(404).send({ error: "connection not found" });
     const app = await g(`app:${pubkey}`);
     // Missing records must 404, not crash into a 500: clients (Damus one-click
     // setup) probe this endpoint and treat 404 as "not configured yet, create
@@ -1278,7 +1280,7 @@ export default {
     const payments = await Promise.all(
       pids.map(async (pid) => {
         const p = await gf(`payment:${pid}`);
-        if (p) p.user = await g(`user:${p.uid}`);
+        if (p) p.user = pick((await g(`user:${p.uid}`)) || {}, fields);
         return p;
       }),
     );
@@ -1340,6 +1342,11 @@ export default {
       const { user } = req;
       const uid = user.id;
       if (secret) pubkey = getPublicKey(hexToBytes(secret));
+
+      // The pubkey names `app:<pubkey>` and `<pubkey>:payments`, so it must be
+      // a real NWC key: a user id here would hand the caller that user's
+      // payment list through GET /app.
+      if (!/^[0-9a-f]{64}$/.test(pubkey)) fail("Invalid pubkey");
 
       // App records live under `app:<pubkey>`. Looking up the bare pubkey made
       // this ownership check ineffective for normal NWC keys and allowed an
