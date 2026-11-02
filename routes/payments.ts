@@ -616,6 +616,18 @@ export default {
 
         const p = await getPayment(`${txid}:${vout}`);
 
+        // A pointer whose payment record is gone (account deleted, record
+        // overwritten) means this output was already credited once. Never
+        // treat it as a first sighting.
+        if (
+          !p &&
+          ((await db.exists(`payment:${txid}:${vout}`)) ||
+            (await db.exists(`credited:${txid}:${vout}`)))
+        ) {
+          warn("blocked re-credit of seen output", txid, vout, sats(amount), address);
+          continue;
+        }
+
         if (!p) {
           const invoice = await getInvoice(address);
           if (!hot && aid !== invoice?.aid) continue;

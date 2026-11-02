@@ -469,6 +469,12 @@ export const credit = async ({
   let balanceKey = "balance";
   if ([PaymentType.bitcoin, PaymentType.liquid].includes(type)) {
     const [txid, vout] = ref.split(":").slice(-2);
+    // Permanent first-credit claim per output. Unlike `payment:<txid>:<vout>`,
+    // nothing else writes or deletes this key.
+    if (!(await db.set(`credited:${txid}:${vout}`, id, { NX: true }))) {
+      warn("duplicate credit blocked", hash, ref);
+      return;
+    }
     p.confirmed = false;
     balanceKey = "pending";
     await s(`payment:${txid}:${vout}`, id);

@@ -91,6 +91,15 @@ export const generate = async ({ invoice, user }) => {
 
   if (!id) id = v4();
   else {
+    // An internal invoice's id becomes its hash, and credit() writes
+    // `payment:<hash>`. A free-form id like "<txid>:<vout>" therefore lets a
+    // payer overwrite an on-chain deposit's dedup pointer, so ids must be the
+    // uuids we hand out.
+    if (
+      typeof id !== "string" ||
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)
+    )
+      fail("invoice not found");
     // A caller-supplied id re-uses an existing record (tip/webhook update,
     // repeated bolt12 offer create). It must be the caller's own: the write
     // below replaces `invoice:<id>` wholesale with uid = this user, and the
