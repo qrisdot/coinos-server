@@ -16,9 +16,16 @@ export default async function changeid(un: string) {
   user.id = nid;
   user.password = "reset";
 
+  // A rekey assumes the account's credentials are compromised, nostr key
+  // included. Drop the pubkey's login mapping rather than pointing it at the
+  // new id, and revoke the key so nostr login can't register a fresh account
+  // with it either. user.pubkey stays on the record so an admin can re-link.
   if (user.pubkey) {
-    await s(user.pubkey, nid);
-    await sa(user.pubkey, nid);
+    for (const k of [`user:${user.pubkey}`, user.pubkey]) {
+      await db.del(k);
+      await arc.del(k);
+    }
+    await db.sAdd("revoked:pubkeys", user.pubkey);
   }
   await s(`user:${un}`, nid);
   await sa(`user:${un}`, nid);

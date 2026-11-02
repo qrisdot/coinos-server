@@ -313,7 +313,10 @@ export default {
         }
       }
 
-      const fields = ["pubkey", "password", "username", "picture", "fresh"];
+      // No pubkey: nothing here proves the caller holds that key, and register()
+      // points `user:<pubkey>` at the new account. Nostr accounts come from
+      // /nostrAuth, which verifies a signed challenge first.
+      const fields = ["password", "username", "picture", "fresh"];
       user = await register(pick(user, fields), ip);
 
       const payload = { id: user.id };

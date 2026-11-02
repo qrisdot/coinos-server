@@ -24,6 +24,17 @@ export default async (user, ip) => {
   if (isReserved(username)) fail("Invalid username");
   if (username.includes("undefined")) fail("Invalid username");
 
+  // Keys revoked by changeid() belong to compromised accounts, and a key that
+  // already resolves to a live account must not be re-pointed at a new one.
+  if (pubkey) {
+    const holder = await db.get(`user:${pubkey}`);
+    if (
+      (await db.sIsMember("revoked:pubkeys", pubkey)) ||
+      (holder && (await db.exists(`user:${holder.replace(/"/g, "")}`)))
+    )
+      fail("Key in use by another account");
+  }
+
   const id = v4();
   user.id = id;
 
