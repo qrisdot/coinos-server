@@ -830,6 +830,15 @@ export const sendOnchain = async (params) => {
   }
 };
 
+// Ceiling on the routing fee a send may reserve: 5% of the amount or 1000
+// sats, whichever is larger. An invoice can carry route hints with arbitrary
+// fees, and whoever controls those hints keeps the difference, so a caller-
+// named fee must not be trusted past what real routes cost.
+const checkRoutingFee = (amount, fee) => {
+  const max = Math.max(1000, Math.ceil(amount * 0.05));
+  if (fee > max) fail(`Routing fee of ⚡️${fee} exceeds the ⚡️${max} limit`);
+};
+
 export const sendKeysend = async ({
   hash,
   amount,
@@ -841,6 +850,7 @@ export const sendKeysend = async ({
   maxTotal = undefined,
 }) => {
   fee = Math.max(Number.parseInt(fee || amount * 0.005), 5);
+  checkRoutingFee(amount, fee);
 
   let p = await gf(`payment:${hash}`);
   if (p) fail("duplicate keysend");
@@ -1052,6 +1062,7 @@ export const sendLightning = async ({
     if (channels.some((c) => c.peer_id === payee)) minfee = 0;
     fee = minfee;
   }
+  checkRoutingFee(amt, fee);
 
   const { pays } = await ln.listpays(pr);
   if (pays.find((p) => p.status === "complete"))
