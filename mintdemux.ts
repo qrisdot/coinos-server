@@ -19,7 +19,8 @@
 //        executed on OLD, else NEW — so wallets can poll a recovery melt
 //   - /v1/checkstate         -> both mints, merged (spent if either says spent)
 //   - /v1/ws                 -> websocket proxy to NEW (subscriptions)
-//   - everything else (swap, mint, restore, mint quote) -> NEW
+//   - /v1/restore            -> split by keyset: old outputs to OLD, rest to NEW
+//   - everything else (swap, mint, mint quote) -> NEW
 // The OLD mint also stands alone at mintrecovery.coinos.io (direct).
 //
 // Client-IP forwarding: cloudflared stamps cf-connecting-ip on every request;
@@ -302,7 +303,27 @@ Bun.serve({
       return proxy(NEW, "POST", ps, raw, fwd(key, true));
     }
 
-    // swap, mint, mint/quote, restore, everything else -> NEW (normal ops)
+    // NUT-09 restore: a seed-only wallet asks for every keyset it sees in
+    // /v1/keysets, so old-keyset outputs go to OLD (whose panic mode admits
+    // restore) and the rest to NEW. Results are concatenated; wallets pair
+    // signatures with the returned outputs, not with request order.
+    if (path === "/v1/restore" && Array.isArray(body?.outputs) && body.outputs.some((o: any) => oldKeysets.has(String(o?.id)))) {
+      const isOld = (o: any) => oldKeysets.has(String(o?.id));
+      const parts = [[OLD, body.outputs.filter(isOld)], [NEW, body.outputs.filter((o: any) => !isOld(o))]] as const;
+      const rs = await Promise.all(parts.filter(([, outs]) => outs.length).map(async ([base, outs]) => {
+        const r = await fetch(`${base}/v1/restore`, { method: "POST", headers: fwd(key, true), body: JSON.stringify({ outputs: outs }) });
+        return { r, txt: await r.text() };
+      }));
+      const bad = rs.find(({ r }) => !r.ok);
+      if (bad) return respond(bad.r, bad.txt);
+      const merged = { outputs: [] as any[], signatures: [] as any[] };
+      for (const { txt } of rs) { const j = parse(txt); merged.outputs.push(...(j?.outputs || [])); merged.signatures.push(...(j?.signatures || [])); }
+      const found = merged.signatures.filter((s: any) => oldKeysets.has(String(s?.id)));
+      if (found.length) log(`restore->OLD found ${found.length} sig(s) worth ${found.reduce((a: number, s: any) => a + (s?.amount || 0), 0)} sat ip=${req.headers.get("cf-connecting-ip") || ""}`);
+      return new Response(JSON.stringify(merged), { headers: J });
+    }
+
+    // swap, mint, mint/quote, everything else -> NEW (normal ops)
     return proxy(NEW, "POST", ps, raw, fwd(key, true));
   },
   // --- /v1/ws: pipe each client websocket to its own upstream connection on
