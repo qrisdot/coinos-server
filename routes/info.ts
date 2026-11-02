@@ -1,0 +1,37 @@
+import { archive } from "$lib/db";
+import { db } from "$lib/db";
+import { getHealthStatus } from "$lib/health";
+import ln from "$lib/ln";
+
+export default {
+  async health(_, res) {
+    const status = getHealthStatus();
+    const httpStatus = status.healthy ? 200 : 503;
+    res.status(httpStatus).send(status);
+  },
+
+  async balances(_, res) {
+    let total = 0;
+
+    // for await (const k of db.scanIterator({ MATCH: "balance:*" })) {
+    //   total += parseInt(await db.get(k));
+    // }
+    //
+    // for await (const k of archive.scanIterator({ MATCH: "balance:*" })) {
+    //   total += parseInt(await archive.get(k));
+    // }
+
+    const funds = await ln.listfunds();
+    const lnchannel = parseInt(
+      funds.channels.reduce((a, b) => a + b.channel_sat, 0),
+    );
+    const lnwallet = parseInt(funds.outputs.reduce((a, b) => a + b.value, 0));
+
+    const info = {
+      lnchannel,
+      lnwallet,
+    };
+
+    res.send(info);
+  },
+};

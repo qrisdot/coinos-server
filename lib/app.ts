@@ -1,0 +1,213 @@
+import config from "$config";
+import cors from "@fastify/cors";
+import fastifyProxy from "@fastify/http-proxy";
+import fastifyMultipart from "@fastify/multipart";
+import fastifyPassport from "@fastify/passport";
+import fastifyRateLimit from "@fastify/rate-limit";
+import fastifySecureSession from "@fastify/secure-session";
+import fastifyStatic from "@fastify/static";
+import fastify from "fastify";
+import pino from "pino";
+
+import dns from "node:dns";
+import * as path from "path";
+
+import { jwtStrategy } from "$lib/auth";
+
+const app = fastify({
+  logger: true,
+  logController: new fastify.LogController({ disableRequestLogging: true }),
+  routerOptions: { maxParamLength: 500 },
+});
+
+const reqLogger = pino(pino.destination("req"));
+
+// Never log plaintext credentials. This MUST recurse: the previous version
+// only redacted top-level keys, but POST /register posts {user:{password}} —
+// one level down — so every registration wrote its plaintext password to the
+// request log, and `pin`/`newpin` were not on the list at all (POST /pin,
+// POST /user and POST /take all carry one). Anything nested in an array is
+// covered too. Depth is bounded so a pathological body can't spin here.
+const REDACT_FIELDS = new Set([
+  "password",
+  "newpassword",
+  "confirm",
+  "pin",
+  "newpin",
+  "secret",
+  "otpsecret",
+  "nsec",
+  "seed",
+  "privkey",
+  "mnemonic",
+]);
+const redactBody = (body: any, depth = 0): any => {
+  if (!body || typeof body !== "object" || depth > 6) return body;
+  if (Array.isArray(body)) return body.map((v) => redactBody(v, depth + 1));
+  const copy: any = { ...body };
+  for (const k of Object.keys(copy)) {
+    if (REDACT_FIELDS.has(k)) {
+      if (copy[k] !== undefined && copy[k] !== null && copy[k] !== "")
+        copy[k] = "[redacted]";
+    } else if (copy[k] && typeof copy[k] === "object") {
+      copy[k] = redactBody(copy[k], depth + 1);
+    }
+  }
+  return copy;
+};
+
+// Never persist session credentials to the request log. The Authorization
+// bearer token and the token cookie are full account credentials (JWTs that
+// don't expire) — logging them turns log-read access into account takeover.
+const REDACT_HEADERS = ["authorization", "cookie"];
+const redactHeaders = (headers: any) => {
+  if (!headers || typeof headers !== "object") return headers;
+  const copy: any = { ...headers };
+  for (const h of REDACT_HEADERS) if (h in copy) copy[h] = "[redacted]";
+  return copy;
+};
+
+// app.addHook("onRequest", async (req) => {
+//   reqLogger.info({ url: req.raw.url, id: req.id });
+// });
+//
+
+// The client IP comes from cf-connecting-ip, which Cloudflare sets and lb/ui
+// pass through. Onion traffic skips Cloudflare: the tor container connects to
+// us directly, so whatever cf-connecting-ip / x-forwarded-for / rate-limit-by
+// the client sent would reach the rate limiter and IP bans untouched. Pin those
+// requests to the tor container's own address instead. Registered before the
+// rate limiter so its keyGenerator sees the rewritten header.
+const UNTRUSTED_PEERS = ["tor"];
+let untrusted = new Set<string>();
+const resolveUntrusted = async () => {
+  const next = new Set<string>();
+  for (const host of UNTRUSTED_PEERS) {
+    try {
+      for (const { address } of await dns.promises.lookup(host, { all: true }))
+        next.add(address);
+    } catch {}
+  }
+  if (next.size) untrusted = next;
+};
+await resolveUntrusted();
+setInterval(resolveUntrusted, 30000).unref();
+
+app.addHook("onRequest", async (req) => {
+  const peer = (req.socket.remoteAddress || "").replace(/^::ffff:/, "");
+  if (!untrusted.has(peer)) return;
+  req.headers["cf-connecting-ip"] = peer;
+  delete req.headers["x-forwarded-for"];
+  delete req.headers["rate-limit-by"];
+});
+
+app.addHook("preHandler", async (req) => {
+  const url = req.raw.url;
+  const ignore = [
+    "/ws",
+    "/me",
+    "/confirm",
+    "/public",
+    "/rates",
+    "/challenge",
+    "/rate",
+    "/lnurlp",
+    "/subscriptions",
+    "/accounts",
+    "/contacts",
+  ];
+  if (ignore.some((path) => url.startsWith(path))) return;
+  if (req.method === "GET" && url.startsWith("/users")) return;
+
+  const xff = req.headers["x-forwarded-for"];
+  const forwardedIp = Array.isArray(xff) ? xff[0] : xff?.split(",")[0]?.trim();
+  const ip = req.headers["cf-connecting-ip"] || forwardedIp || req.ip;
+
+  reqLogger.info({
+    method: req.method,
+    url,
+    ip,
+    headers: redactHeaders(req.headers),
+    query: req.query,
+    body: redactBody(req.body),
+    user: (req.user as any)?.username,
+    id: req.id,
+  });
+});
+
+app.register(fastifyRateLimit, {
+  allowList: (req) => req.raw.url?.includes("public"),
+  max: 2000,
+  timeWindow: 2000,
+  keyGenerator: (req) => {
+    const ip = (req.headers["cf-connecting-ip"] as string) || req.ip;
+    const ua = req.headers["user-agent"] || "unknown-ua";
+    return req.headers["rate-limit-by"] === "ua" ? ua : ip;
+  },
+  errorResponseBuilder: () => {
+    return {
+      statusCode: 429,
+      error: "Too Many Requests",
+      message: "Rate limit exceeded, retry in 2 seconds",
+    };
+  },
+});
+
+app.register(fastifyRateLimit, {
+  allowList: (req) => {
+    const url = req.raw.url || "";
+    const matches = url.includes("/login") || url.includes("/send");
+    return !matches;
+  },
+  max: 10,
+  timeWindow: 10000,
+  keyGenerator: (req) => (req.headers["user-agent"] as string) || "unknown-ua",
+  errorResponseBuilder: () => ({
+    statusCode: 429,
+    error: "Too Many Requests",
+    message: "Rate limit exceeded",
+  }),
+});
+
+app.register(fastifyProxy, {
+  upstream: "http://localhost:3120",
+  prefix: "/ws",
+  rewritePrefix: "/ws",
+  websocket: true,
+  disableRequestLogging: true,
+});
+
+app.register(fastifySecureSession, {
+  key: Buffer.from(config.jwt, "hex"),
+});
+
+app.register(fastifyPassport.initialize());
+app.register(fastifyPassport.secureSession());
+
+fastifyPassport.use("jwt", jwtStrategy);
+
+app.register(fastifyMultipart, { limits: { fileSize: 10 ** 7 } });
+
+app.register(fastifyStatic, {
+  root: path.join("/home/bun/app/data/uploads"),
+  prefix: "/public/",
+});
+
+await app.register(cors, {
+  origin: true,
+  credentials: true,
+});
+
+app.setErrorHandler((error, _, reply) => {
+  if (error instanceof fastify.errorCodes.FST_ERR_BAD_STATUS_CODE) {
+    reply.status(500).send({ ok: false });
+  } else {
+    reply.send(error);
+  }
+});
+
+app.setNotFoundHandler((_, reply) =>
+  reply.code(404).type("text/html").send("Not Found"),
+);
+
+export default app;

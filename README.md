@@ -1,30 +1,73 @@
-# coinos-server
+# Coinos
 
-Coinos is a bitcoin wallet app that supports payments over the <a href="https://bitcoin.org">bitcoin</a>, <a href="https://blockstream.com/liquid/">liquid</a> and <a href="http://lightning.network/">lightning</a> networks. Try it out at <a href="https://coinos.io/">coinos.io</a>.
+Coinos is a web-based bitcoin and nostr client. You can use it as a front end to your personal bitcoin and lightning nodes or host a public instance that allows anyone to register with a username and password. Try ours at https://coinos.io
 
-This repository contains the code for the backend API server which is implemented as a NodeJS application. The code for the frontend UI is tracked separately <a href="https://github.com/asoltys/coinos.io">here</a>.
+This repository contains the code for the API server. The frontend code is at <a href="https://github.com/coinos/coinos-ui">https://github.com/coinos/coinos-ui</a>
 
 ## Requirements
 
-* <a href="https://github.com/bitcoin/bitcoin">bitcoind</a> with zmq support
-* <a href="https://github.com/ElementsProject/elements">elementsd</a> with zmq support
-* two instances of <a href="https://github.com/lightningnetwork/lnd">lnd</a> (<a href="https://github.com/elementsproject/lightning">c-lightning</a> coming soon)
-* a database that <a href="https://github.com/sequelize/sequelize">sequelize</a> can talk to
+- Make sure you have <a href="https://docs.docker.com/get-docker/">Docker</a> installed in your system..
 
-The bitcoind and elementsd nodes can be a pruned if you want to limit the amount of disk space used.
+## Quick Install
 
-The reason for running two lightning nodes is so that one can create invoices while the other sends payments when two coinos users want to pay each other. 
+1. Start the Docker application.
 
-## Getting Started
+2. Run the start up script:
+```bash
+chmod +x setup.sh
+./setup.sh
+```
 
-    git clone https://github.com/asoltys/coinos-server
-    cd coinos-server
-    cp config/index.js.sample config/index.js <-- edit with connection info for servers and keys for 3rd party API's
-    yarn
-    yarn start
+The above script will setup docker containers for the different components that Coinos needs to run.
 
-## Database Setup
+## Understanding Coinos:
 
-I've only tested with <a href="https://mariadb.org/">Maria</a>. Here's a [schema](https://github.com/asoltys/coinos-server/blob/master/db/schema.sql) to get you started.
+Coinos comprises of the folowing components:
+- **The Coinos Server:** This is the main server implementation that setups and handles the API requests. Depends on the Bitcoin node, the Lightning node and the KeyDB database.
+- **[Bitcoin node](https://github.com/bitcoin/bitcoin):** This is the Bitcoin Core implementation that upholds the chains consensus rules.
+- **[Liquid Implementation](https://liquid.net/):** This is a Bitcoin layer-2 network that uses Bitcoin as its native asset and allows users to issue their own assets.
+- **[Core Lightning](https://docs.corelightning.org/docs/home):** This is also a Bitcoin layer-2 network that facilitates lightning fast Bitcoin payments via the Lightning Network protocol.
+- **[KeyDB](https://docs.keydb.dev/):** KeyDB is a high performance fork of Redis with a focus on multithreading, memory efficiency, and high throughput.
+- **[Nostr](https://nostr.com/):** Nostr is a simple, open protocol that enables global, decentralized, and censorship-resistant social media.
+- **[Cashu Nutshell](https://github.com/cashubtc/nutshell):** Nutshell is an Ecash wallet and mint for Bitcoin Lightning based on the Cashu protocol.
 
-    cat db/schema.sql | mysql -u root -p
+A complete Coinos site utilizes all of the above components to support it's features. However, 
+its important to note the most important ones: **Coinos Server**, **Bitcoin node**, **Core Lightning** and **KeyDB**. Without these, 
+none of the Coinos features would work and the server would probably not start. 
+
+If you want to run thin, you can remove the other containers 
+from the setup(You will get to see where to do this later). 
+
+### How Coinos Works
+
+Running the startup script `./setup.sh` runs a few commands for you in the background. The commands are performed in this order:
+
+1. `cp config.ts.sample config.ts`:
+
+A `config.ts` file is created and it's contents copied from the sample file `config.ts.sample`. This file holds the configuration options 
+the various Coinos components discussed above.
+
+2. `cp compose.yml.sample compose.yml`
+
+A `compose.yml` file is created and it's contents copied from the sample file `compose.yml.sample`. This file conatins instructions 
+on the various Docker containers required to start Coinos. You will also notice duplicate component containers with different names such as cl,clb and clc. These are meant to easen the testing and development process locally as you can simulate transactions and connections.
+
+3. `cp -r sampledata data`
+
+A folder `data` is created and it's contents copied from the `sampledata` folder. This directory contains various folders for the different components integrated by Coinos. This is where you will find specific configurations and settings for the different components such as Bitcoin and Lightning.
+
+4. `docker compose up -d` and `docker run -it -v $(pwd):/home/bun/app --entrypoint bun asoltys/coinos-server i`
+
+Finally, the various Docker containers configured above are started  and the Coinos server application is run. At this point, all containers should be running, otherwise it could indicate a problem with the previous tasks execution. You can check your container's status by running this command: `docker ps -a`.
+
+5. `docker exec -it bc bitcoin-cli createwallet coinos` and `docker exec -it bc bitcoin-cli rescanblockchain`
+
+Bitcoin needs a wallet and to be synced to the blockchain to work. The startup script creates a Bitcoin wallet and rescans the blockchain to update it's state. By default, the chain is set to `regtest` so we also generate a few blocks and an address to get going.
+
+6. `docker exec -it lq elements-cli createwallet coinos`
+
+Liquid requires a wallet also, thus we generate one for it.
+
+Basically, the startup script automates tasks you would have done manually and easen the process. You can also add your own custom commands that you would like executed when starting up.
+
+### Tips
