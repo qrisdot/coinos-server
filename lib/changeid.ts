@@ -116,6 +116,11 @@ export default async function changeid(un: string) {
     } catch (e) {}
   }
 
+  // Freezes and evictions are keyed by uid, so carry them to the new id or a
+  // rekey (which the blocked-address check triggers on its own) lifts them.
+  for (const set of ["blacklist", "evicted"])
+    if (await db.sIsMember(set, id)) await db.sAdd(set, nid);
+
   l(`SECURITY: rekeyed ${un} from ${id} to ${nid}`);
   return nid;
 }
