@@ -559,6 +559,17 @@ export default {
       let user = await getUser(username);
 
       if (!isAdmin) {
+        // changeid leaves the literal "reset" in place of a hash, so no
+        // password can ever match. Say so, letting the client point the
+        // owner at support instead of a generic login failure. This runs
+        // after the captcha and the per-IP failure cap, and counts as a
+        // failure itself.
+        if (user?.password === "reset") {
+          await db.incrBy(ipFailKey, 1);
+          if ((await db.ttl(ipFailKey)) < 0) await db.expire(ipFailKey, 600);
+          return res.code(401).send("account reset");
+        }
+
         let verified = false;
         try {
           if (user?.password)
