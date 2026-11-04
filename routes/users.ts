@@ -9,6 +9,7 @@ import { isDefaultName } from "$lib/default-names";
 import { upgradeLegacyNsec } from "$lib/legacynsec";
 import { mail, templates } from "$lib/mail";
 import { getNostrUser, getProfile, serverPubkey2 } from "$lib/nostr";
+import deleteUser from "$lib/deluser";
 import register from "$lib/register";
 import { assertNameFree } from "$lib/names";
 import { isReserved } from "$lib/reserved";
@@ -880,22 +881,24 @@ export default {
     res.send({});
   },
 
-  // Authenticated self-delete: wipes every key tied to the calling user,
-  // mirroring scripts/delall-legacy.ts. Gated by typing the username (works for
-  // password and nostr accounts alike) and refuses while a balance remains so a
-  // user can't accidentally destroy funds.
+  // Authenticated self-delete: wipes every key tied to the calling user via
+  // lib/deluser (the same sweep as scripts/delall.ts, offers and archive
+  // included). Gated by typing the username (works for password and nostr
+  // accounts alike) plus the PIN when one is set, and refuses while a balance
+  // remains so a user can't accidentally destroy funds.
   async deleteSelf(req, res) {
     try {
       const { user } = req;
-      const { id, username, pubkey } = user;
+      const { id, username } = user;
 
       const confirm = (req.body?.confirm || "").toString().trim().toLowerCase();
       if (confirm !== username.toLowerCase())
         fail("Type your username to confirm account deletion");
+      await requirePin(req);
 
       // Allow deletion through dust (often too small to withdraw); only block
       // a meaningful balance so nobody destroys real funds by accident. Sum
-      // EVERY account (main + sub-accounts) — the deletion loop below wipes each
+      // EVERY account (main + sub-accounts) — the sweep wipes each
       // sub-account's balance:/pending: keys unconditionally, so a guard that
       // only checked the main account let a user with funds parked in a
       // sub-account pass and silently destroy them.
@@ -909,80 +912,9 @@ export default {
       if (total > 10000)
         fail("Withdraw your balance before deleting your account");
 
-      const keys = [
-        `user:${id}`,
-        // username->uid mapping is stored lowercased+despaced (see register.ts);
-        // include both forms so a mixed-case username can't leave a dangling alias.
-        `user:${username.toLowerCase().replace(/\s/g, "")}`,
-        `user:${username}`,
-        `${id}:payments`,
-        `${id}:payments:last`,
-        `${id}:apps`,
-        `${id}:lastlen`,
-        `${id}:accounts`,
-        `${id}:contacts`,
-        `${id}:invoices`,
-        `${id}:items`,
-        `${id}:pins`,
-        `${id}:subscriptions`,
-        `${id}:trust`,
-        `${id}:square`,
-        `${id}:codeVerifier`,
-        `account:${id}`,
-        `balance:${id}`,
-        `pending:${id}`,
-        `credit:bitcoin:${id}`,
-        `credit:lightning:${id}`,
-        `credit:liquid:${id}`,
-      ];
+      const { deleted, disabled } = await deleteUser(user);
 
-      if (pubkey) {
-        keys.push(
-          `user:${pubkey}`,
-          `${pubkey}:follows`,
-          `${pubkey}:follows:n`,
-          `${pubkey}:followers`,
-          `${pubkey}:followers:n`,
-          `${pubkey}:pubkeys`,
-        );
-        if (user.nip5) await db.sRem("nip5", `${username}:${pubkey}`);
-      }
-
-      // Connected NWC apps: drop each app record + its payment index.
-      // `${id}:apps` is a SET (sAdd in register.ts), so use sMembers, not lRange.
-      for (const ap of await db.sMembers(`${id}:apps`))
-        keys.push(`app:${ap}`, `${ap}:payments`);
-
-      // Sub-accounts and their payment records.
-      for (const aid of await db.lRange(`${id}:accounts`, 0, -1)) {
-        if (aid === id) continue;
-        for (const pid of await db.lRange(`${aid}:payments`, 0, -1))
-          keys.push(`payment:${pid}`);
-        keys.push(
-          `account:${aid}`,
-          `${aid}:payments`,
-          `${aid}:payments:last`,
-          `${aid}:invoices`,
-          `balance:${aid}`,
-          `pending:${aid}`,
-        );
-      }
-
-      // Main-account payment + invoice records.
-      for (const pid of await db.lRange(`${id}:payments`, 0, -1))
-        keys.push(`payment:${pid}`);
-      for (const iid of await db.lRange(`${id}:invoices`, 0, -1))
-        keys.push(`invoice:${iid}`);
-
-      let deleted = 0;
-      for (const k of keys) {
-        if (await db.exists(k)) {
-          await db.del(k);
-          deleted++;
-        }
-      }
-
-      l("user self-deleted", username, id, `${deleted} keys`);
+      l("user self-deleted", username, id, `${deleted} keys, ${disabled} offers`);
       try {
         res.clearCookie("token");
       } catch {}
